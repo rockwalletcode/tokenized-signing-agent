@@ -133,6 +133,38 @@ export default class XKey {
     writeBuffer.write(this.keyBytes);
   }
 
+  toInternalBytes() {
+    const buf = new WriteBuffer();
+    this.writeInternal(buf);
+    return buf.toBytes();
+  }
+
+  writeInternal(writeBuffer) {
+    writeBuffer.writeUInt8(0x40);
+    writeBuffer.writeUInt8(this.depth);
+    writeBuffer.write(this.fingerPrint);
+    writeBuffer.writeUInt32BE(this.index);
+    writeBuffer.write(this.chainCode);
+    writeBuffer.write(this.keyBytes);
+  }
+
+  readInternal(readBuffer) {
+    this.version = Bip32PublicVersion;
+    let type = readBuffer.readUInt8();
+    if (type != 0x40) throw "Not a known public key format";
+    this.depth = readBuffer.readUInt8();
+    this.fingerPrint = new Uint8Array(readBuffer.read(4));
+    this.index = readBuffer.readUInt32BE();
+    this.chainCode = new Uint8Array(readBuffer.read(32));
+    this.keyBytes = new Uint8Array(readBuffer.read(33));
+    
+    if (this.keyBytes[0] !== 0x02 && this.keyBytes[0] !== 0x03) {
+      throw new Error(
+        `XKey: xpub key invalid first byte ${this.keyBytes[0]}`,
+      );
+    }
+  }
+
   read(readBuffer) {
     this.version = readBuffer.readUInt32BE();
     this.depth = readBuffer.readUInt8();

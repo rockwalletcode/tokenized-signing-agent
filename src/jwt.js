@@ -35,8 +35,9 @@ function parseJWT(jwt) {
 
 export function expiredFraction(jwt, createdAt) {
     let { payload } = parseJWT(jwt);
-    let issued = payload.iat || created;
+    let issued = payload.iat || createdAt;
+    let created = createdAt || payload.iat;
     let expires = payload.expires;
     let now = Date.now() / 1e3;
-    return (now - createdAt) / (expires - issued)
+    return (now - created) / (expires - issued)
 }

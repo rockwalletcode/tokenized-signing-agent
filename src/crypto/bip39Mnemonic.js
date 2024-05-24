@@ -36,16 +36,20 @@ export async function mnemonicToEntropy(mnemonic) {
   let byteIndex = 0;
 
   for (let word of words) {
-    const wordIndex = wordList.indexOf(word);
+    let wordIndex = wordList.indexOf(word);
+    if (wordIndex < 0) {
+      throw new Error(`Unknown word: ${word}`)
+    }
     bits = (bits << 11) + wordIndex;
+
     bitLength += 11;
     while (bitLength >= 8) {
       bitLength -= 8;
-      mnemonicData[byteIndex++] = bits >>> bitLength;
+      mnemonicData[byteIndex++] = (bits >>> bitLength) & 0xff;
     }
   }
 
-  const entropy = mnemonicData.slice(0, 32);
+  const entropy = mnemonicData.subarray(0, 32);
 
   const checksum = await crypto.subtle.digest('SHA-256', entropy);
 

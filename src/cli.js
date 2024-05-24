@@ -1,11 +1,11 @@
 #!/usr/bin/env node
+import { readFile, writeFile } from "node:fs/promises";
 import API from "./Api.js";
 import { createSecretJWK, createSecretKeyBytes, encrypt } from "./crypto/Encryption.js";
 import { entropyToMnemonic, mnemonicToEntropy } from "./crypto/bip39Mnemonic.js";
 import { normalizeMnemonic } from "./crypto/mnemonic.js";
-import { httpServe } from "./server.js";
-import { readFile, writeFile } from "node:fs/promises";
-const { styleText = (format, content) => content } = await import("node:util");
+import { httpServe, httpHelp } from "./server.js";
+const { styleText = (_, content) => content } = await import("node:util");
 
 let version;
 try {
@@ -61,6 +61,9 @@ async function configureSeedPhrase(config, seedPhraseOptions) {
 
     let create = seedPhraseOptions == ":generate" || seedPhraseOptions == ":silent";
     if (create) {
+        if (await config.api.hasRootkeys()) {
+            throw "Account already has root keys. Supply a seed phrase.";
+        }
         entropy = await createSecretKeyBytes();
         seedPhrase = await entropyToMnemonic(entropy);
         if (seedPhraseOptions != ":silent") {
@@ -133,8 +136,13 @@ ${commandStyle('accept')} <secrets.json> <handle>
 
 async function send(configPath, fromHandle, toHandle, instrumentId, amount) {
     const config = await Config.load(configPath);
-    let { activity } = await config.api.send(fromHandle, toHandle, instrumentId, amount);
-    console.log("Activity:", activity);
+    let { activity, txs, executed } = await config.api.send(fromHandle, toHandle, instrumentId, amount);
+    console.log("Activity ID:", activity);
+    if (executed) {
+        console.log("Tx ids:", txs);
+    } else {
+        console.log("Execution in progress");
+    }
 }
 
 send.help = `
@@ -143,6 +151,19 @@ ${commandStyle('send')} <secrets.json|env:SECRETS> <me@tkz.id> <you@tkz.id> <ins
     instrumentID can be found in the Tokenized desktop app
     amount should be an integer in the minor unit of the token
 `;
+
+async function describe(configPath, handle, activityId) {
+    const config = await Config.load(configPath);
+    console.log(await config.api.describe(handle, activityId));
+}
+
+describe.help = `
+${commandStyle('describe')} <secrets.json|env:SECRETS> <me@tkz.id> <activity ID>
+    Provide details about a previous transfer.
+    Note the output of this command is not expected to remain stable and may change.
+    Contact support for more information.
+`;
+
 
 function help() {
     console.log("Tokenized protocol signing agent");
@@ -160,12 +181,22 @@ serve.help = `
 ${commandStyle('serve')} <secrets.json|env:SECRETS> <port>
     Run an HTTP server which can be used to send tokens.
     The HTTP server is unauthenticated and unencrypted and must be run in a secure environment.
+${httpHelp}
 `;
 
+async function show(configSource) {
+    const config = await Config.load(configSource);
+    console.log(await config.api.getSeedPhrase(config.api.rootKeyId));
+}
+
+show.help = `
+${commandStyle('show')} <secrets.json|env:SECRETS>
+    Print seed phrase
+`;
 
 const [command, ...args] = process.argv.slice(2);
 
-const commands = { init, pair, seed, send, serve, accept };
+const commands = { init, pair, seed, send, serve, accept, show, describe };
 
 try {
     await (commands[command] || help)(...args);

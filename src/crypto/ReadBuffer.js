@@ -10,11 +10,11 @@ export default class ReadBuffer {
       if (value?.constructor?.name === 'ArrayBuffer') {
         this.buf = value;
       } else if (value instanceof Uint8Array) {
-        this.buf = value.buffer;
+        this.buf = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
       } else if (typeof value === 'string' || value instanceof String) {
         this.buf = hexToArrayBuffer(value);
       } else if (Buffer.isBuffer(value)) {
-        this.buf = Uint8Array.from(value).buffer;
+        this.buf = value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
       } else {
         throw new TypeError(
           `ReadBuffer Must provide a Buffer: ${typeof value}`,

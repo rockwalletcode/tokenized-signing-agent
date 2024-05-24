@@ -29,6 +29,7 @@ export default class API {
   }
 
   async updateDeviceAuthToken() {
+    if (!this.privateJWK) throw "Pairing not found";
     const privateKey = await importPrivateKey(this.privateJWK);
 
     let singleUseJWT = await createJWT(this.keyId, privateKey, {
@@ -38,7 +39,7 @@ export default class API {
     const { data: { token } } = await this.fetch("GET", url`auth/token/device`, null, singleUseJWT);
 
     this.tokenCreatedAt = Date.now() / 1e3;
-    this.token = token;
+    this.jwt = token;
     this.updateTokenPromise = null;
   }
 
@@ -71,10 +72,16 @@ export default class API {
     return { privateJWK, keyId, deviceId };
   }
 
-  async makeXPub(seedPhrase, path) {
+  static async makeXPub(seedPhrase, path) {
     const rootKey = await XKey.fromSeed(await mnemonic2Seed(seedPhrase))
     const xKey = await rootKey.derive(path);
     return xKey.toPublic().toString();
+  }
+
+  static async makeXPubInternal(seedPhrase, path) {
+    const rootKey = await XKey.fromSeed(await mnemonic2Seed(seedPhrase))
+    const xKey = await rootKey.derive(path);
+    return Buffer.from(xKey.toPublic().toInternalBytes()).toString("hex");
   }
 
   async verifySeedPhrase(seedPhrase) {
@@ -83,7 +90,7 @@ export default class API {
 
     for (let { id: rootKeyId } of rootKeys) {
       const { data: { derivation_path } } = await this.fetch("GET", url`users/@me/rootkeys/${rootKeyId}/check`);
-      const xpub = await this.makeXPub(seedPhrase, derivation_path);
+      const xpub = await API.makeXPub(seedPhrase, derivation_path);
       await this.fetch("POST", url`users/@me/rootkeys/${rootKeyId}/check`, { derivation_path, xpub });
       return rootKeyId;
     }
@@ -131,9 +138,14 @@ export default class API {
     }
   }
 
+  async hasRootkeys() {
+    const { data: rootkeys } = await this.fetch("GET", url`users/@me/rootkeys`);
+    return !!rootkeys.length;
+  }
+
   async getEncryptedRootKey(rootKeyId) {
     const { data: rootkeys } = await this.fetch("GET", url`users/@me/rootkeys`);
-    return Buffer.from(rootkeys.find(({ id, device_id }) => id == rootKeyId && device_id == this.deviceId)?.encrypted, "hex");
+    return Buffer.from(rootkeys.find(({ id, device_id }) => (!rootKeyId || id == rootKeyId) && device_id == this.deviceId)?.encrypted, "hex");
   }
 
   async send(fromHandle, toHandle, instrument, amount) {
@@ -159,7 +171,7 @@ export default class API {
 
       if (!pending.length) {
         console.log("Waiting for pending transactions to sign");
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 250));
         continue;
       }
 
@@ -169,8 +181,34 @@ export default class API {
       break;
     }
 
-    return { activity: activity_id };
+    let patience = 20;
+    while (patience-- > 0) {
+      const { data: { stage, transactions } } = await this.fetch("GET", url`profiles/${profileId}/activity/${activity_id}`);
+
+      if (stage != "executed") {
+        console.log("Waiting for completion");
+        await new Promise(resolve => setTimeout(resolve, 250));
+        continue;
+      }
+
+      let txs = transactions.filter(({ type }) => type == "tx").map(({ txid }) => txid);
+
+      return { activity: activity_id, txs, executed: true };
+    }
+    return { activity: activity_id, executed: false };
   }
+
+  async describe(handle, activity_id) {
+    const { data: proposals } = await this.fetch("GET", url`proposals`);
+
+    const proposal = proposals.find(proposal => proposal.handle == handle);
+    const profileId = proposal.profile_id;
+
+    const { data } = await this.fetch("GET", url`profiles/${profileId}/activity/${activity_id}`);
+    return data;
+  }
+
+
 
   async getSeedPhrase(rootKeyId) {
     const encryptedEntropy = await this.getEncryptedRootKey(rootKeyId);
@@ -207,9 +245,13 @@ export default class API {
       { signatures }
     );
 
+    let txId = await tx.id("hex");
+
     if (response?.data) {
-      await this.sign(profileId, response?.data);
+      return [txId, ...await this.sign(profileId, response?.data)];
     }
+
+    return [txId];
   }
 
   async signPendingTxId(profileId, pendingTransactionId) {
@@ -217,14 +259,14 @@ export default class API {
       "GET", url`profiles/${profileId}/pending_transactions/${pendingTransactionId}`
     );
 
-    await this.sign(profileId, response.data);
+    return await this.sign(profileId, response.data);
   }
 
   async getToken() {
-    if (!this.token || expiredFraction(this.token, this.tokenCreatedAt) > 0.5) {
+    if (!this.jwt || expiredFraction(this.jwt, this.tokenCreatedAt) > 0.5) {
       await (this.updateTokenPromise ||= await this.updateDeviceAuthToken());
     }
-    return this.token;
+    return this.jwt;
   }
 
   async fetch(method, urlSuffix, body, token) {
