@@ -181,7 +181,7 @@ export default class API {
       break;
     }
 
-    let patience = 20;
+    let patience = 80;
     while (patience-- > 0) {
       const { data: { stage, transactions } } = await this.fetch("GET", url`profiles/${profileId}/activity/${activity_id}`);
 
